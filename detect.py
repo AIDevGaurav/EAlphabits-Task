@@ -1,18 +1,62 @@
 import cv2
+import os
 import time
 import threading
+import paho.mqtt.client as mqtt  # type: ignore
 
-rtsp_url = "rtsp://admin:admin@789@192.168.1.199:554/unicast/c1/s0/live"  # Replace with your RTSP URL
+# MQTT configuration
+broker = "broker.hivemq.com"  # Replace with your MQTT broker address
+port = 1883  # Replace with your MQTT broker port
+topic = "motion/detection"
 
+# Define the MQTT client callbacks
+def on_connect(client, userdata, flags, rc):
+    print(f"Connected with result code {rc}")
+    client.subscribe(topic)  # Subscribe to the topic when connected
+
+def on_message(client, userdata, msg):
+    print(f"Received message: {msg.topic} -> {msg.payload.decode()}")
+
+def on_disconnect(client, userdata, rc):
+    if rc != 0:
+        print("Unexpected disconnection.")
+    else:
+        print("Disconnected successfully.")
+
+# Initialize MQTT client and set up callbacks
+mqtt_client = mqtt.Client()
+mqtt_client.on_connect = on_connect
+mqtt_client.on_message = on_message
+mqtt_client.on_disconnect = on_disconnect
+
+# Connect to the broker
+mqtt_client.connect(broker, port, 60)
+
+# Function to publish a message
+def publish_message(message):
+    mqtt_client.publish(topic, message)
+    print(f"Published message: {message}")
+
+# Start the MQTT client loop in a separate thread
+mqtt_client.loop_start()
+
+# Ensure directories exist
+image_dir = "images"
+video_dir = "videos"
+os.makedirs(image_dir, exist_ok=True)
+os.makedirs(video_dir, exist_ok=True)
+
+# Function to capture an image
 def capture_image(frame):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    image_filename = f"motion_{timestamp}.jpg"
+    image_filename = os.path.join(image_dir, f"motion_{timestamp}.jpg")
     cv2.imwrite(image_filename, frame)
     print(f"Captured image: {image_filename}")
 
+# Function to capture a video
 def capture_video(rtsp_url):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    video_filename = f"motion_{timestamp}.avi"
+    video_filename = os.path.join(video_dir, f"motion_{timestamp}.avi")
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
     cap_video = cv2.VideoCapture(rtsp_url)
     width = int(cap_video.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -30,7 +74,8 @@ def capture_video(rtsp_url):
     out.release()
     print(f"Captured video: {video_filename}")
 
-def detectMotion():
+# Function to detect motion
+def detect_motion():
     cap = cv2.VideoCapture(rtsp_url)
 
     # Parameters for motion detection
@@ -94,7 +139,7 @@ def detectMotion():
                 motion_detected = True
 
         current_time = time.time()
-        if motion_detected and (current_time - last_detection_time > 60): #replace 60 with your desired second delay....
+        if motion_detected and (current_time - last_detection_time > 60):  # replace 60 with your desired second delay....
             cv2.putText(display_frame, "Motion Detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
             # Capture image
@@ -102,6 +147,9 @@ def detectMotion():
 
             # Capture video
             threading.Thread(target=capture_video, args=(rtsp_url,)).start()
+
+            # Publish MQTT message
+            threading.Thread(target=publish_message, args=("Motion detected!",)).start()
 
             last_detection_time = current_time
 
@@ -121,4 +169,12 @@ def detectMotion():
     cap.release()
     cv2.destroyAllWindows()
 
-detectMotion()
+# RTSP URL for motion detection
+rtsp_url = "rtsp://admin:admin@789@192.168.1.199:554/unicast/c1/s0/live"  # Replace with your RTSP URL
+
+# Start motion detection
+detect_motion()
+
+# Stop the MQTT client loop and disconnect
+mqtt_client.loop_stop()
+mqtt_client.disconnect()
