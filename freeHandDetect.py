@@ -7,13 +7,14 @@ import paho.mqtt.client as mqtt  # type: ignore
 from concurrent.futures import ThreadPoolExecutor
 
 # MQTT configuration
-broker = "broker.hivemq.com"  # Replace with your MQTT broker address
+broker = "192.168.1.75"  # Replace with your MQTT broker address
 port = 1883  # Replace with your MQTT broker port
 topic = "motion/detection"
 
 # Define the MQTT client callbacks
 def on_connect(client, userdata, flags, rc):
-    print(f"Connected with result code {rc}")
+    client_id = client._client_id.decode() 
+    print(f"Connected with result code {rc} and client id {client_id}")
     client.subscribe(topic)  # Subscribe to the topic when connected
 
 def on_message(client, userdata, msg):
@@ -26,7 +27,7 @@ def on_disconnect(client, userdata, rc):
         print("Disconnected successfully.")
 
 # Initialize MQTT client and set up callbacks
-mqtt_client = mqtt.Client()
+mqtt_client = mqtt.Client(client_id="Gaurav")
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 mqtt_client.on_disconnect = on_disconnect
@@ -78,23 +79,23 @@ def capture_video(rtsp_url):
 
 # Function to handle mouse events for drawing the ROI
 def draw_roi(event, x, y, flags, param):
-    global roi_points, drawing, display_frame, roi_mask
+    global drawing, current_points
 
     if event == cv2.EVENT_LBUTTONDOWN:
         drawing = True
-        roi_points = [(x, y)]
+        current_points = [(x, y)]
 
     elif event == cv2.EVENT_MOUSEMOVE:
         if drawing:
-            roi_points.append((x, y))
-            cv2.line(display_frame, roi_points[-2], roi_points[-1], (0, 255, 0), 2)
+            current_points.append((x, y))
+            cv2.line(display_frame, current_points[-2], current_points[-1], (0, 255, 0), 2)
 
     elif event == cv2.EVENT_LBUTTONUP:
         drawing = False
-        roi_points.append((x, y))
-        cv2.line(display_frame, roi_points[-2], roi_points[-1], (0, 255, 0), 2)
-        cv2.fillPoly(roi_mask, [np.array(roi_points)], (255, 255, 255))
-        cv2.fillPoly(display_frame, [np.array(roi_points)], (0, 255, 0))
+        current_points.append((x, y))
+        cv2.line(display_frame, current_points[-2], current_points[-1], (0, 255, 0), 2)
+        roi_points.append(current_points)  # Save the current shape
+        cv2.fillPoly(roi_mask, [np.array(current_points)], (255, 255, 255))
 
 # Function to detect motion
 def detect_motion():
@@ -129,8 +130,7 @@ def detect_motion():
     cv2.destroyWindow("Draw ROI")
 
     # Calculate the area of the ROI
-    roi_contour = np.array(roi_points)
-    roi_area = cv2.contourArea(roi_contour)
+    roi_area = sum(cv2.contourArea(np.array(shape)) for shape in roi_points)
     full_frame_width = 1920
     full_frame_height = 1080
     full_frame_area = full_frame_width * full_frame_height
@@ -170,7 +170,7 @@ def detect_motion():
                     motion_detected = True
 
             current_time = time.time()
-            if motion_detected and (current_time - last_detection_time > 60):  # replace 60 with your desired second delay....
+            if motion_detected and (current_time - last_detection_time > 10):  # replace 60 with your desired second delay....
                 cv2.putText(display_frame, "Motion Detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
                 # Capture image and video in the background
@@ -184,6 +184,7 @@ def detect_motion():
                     message = {
                         "motion": "Motion detected!",
                         "rtsp_link": rtsp_url,
+                        "cameraId": 20,
                         "image": image_filename,
                         "video": video_filename
                     }
@@ -193,9 +194,9 @@ def detect_motion():
 
                 last_detection_time = current_time
 
-            # Draw ROI on the display frame
-            if roi_points:
-                cv2.polylines(display_frame, [np.array(roi_points)], isClosed=True, color=(255, 0, 0), thickness=2)
+            # Draw all ROIs on the display frame
+            for shape in roi_points:
+                cv2.polylines(display_frame, [np.array(shape)], isClosed=True, color=(255, 0, 0), thickness=2)
 
             # Display frame
             cv2.imshow("Motion Detection", display_frame)
@@ -210,8 +211,9 @@ def detect_motion():
     cap.release()
     cv2.destroyAllWindows()
 
-# Global variables for drawing the ROI
-roi_points = []
+# Global variables for drawing the ROIs
+roi_points = []  # Store all shapes here
+current_points = []  # Points for the current shape being drawn
 drawing = False
 
 # RTSP URL for motion detection
@@ -221,5 +223,4 @@ rtsp_url = "rtsp://admin:admin@789@192.168.1.199:554/unicast/c1/s0/live"  # Repl
 detect_motion()
 
 # Stop the MQTT client loop and disconnect
-mqtt_client.loop_stop()
-mqtt_client.disconnect()
+mqtt_client.loop_stop

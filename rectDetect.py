@@ -75,7 +75,10 @@ def capture_video(rtsp_url):
     print(f"Captured video: {video_filename}")
 
 # Function to detect motion
-def detect_motion():
+def detect_motion(rtsp_url, camera_id, coordinates):
+    print(f"Starting motion detection on Camera ID {camera_id} with RTSP URL {rtsp_url}")
+    print(f"Using coordinates: {coordinates}")
+    
     cap = cv2.VideoCapture(rtsp_url)
 
     # Parameters for motion detection
@@ -83,8 +86,8 @@ def detect_motion():
     min_area_full_frame = 50
 
     # Define the Rate Of Interest (top-left and bottom-right corners)
-    roi_top_left = (350, 200)
-    roi_bottom_right = (550, 400)
+    roi_top_left = (coordinates["x"], coordinates["y"])
+    roi_bottom_right = (coordinates["x"] + coordinates["width"], coordinates["y"] + coordinates["height"])
 
     # Calculate ROI dimensions
     roi_width = roi_bottom_right[0] - roi_top_left[0]
@@ -139,7 +142,7 @@ def detect_motion():
                 motion_detected = True
 
         current_time = time.time()
-        if motion_detected and (current_time - last_detection_time > 60):  # replace 60 with your desired second delay....
+        if motion_detected and (current_time - last_detection_time > 10):  # replace 60 with your desired second delay....
             cv2.putText(display_frame, "Motion Detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
             # Capture image
@@ -169,11 +172,13 @@ def detect_motion():
     cap.release()
     cv2.destroyAllWindows()
 
-# RTSP URL for motion detection
-rtsp_url = "rtsp://admin:admin@789@192.168.1.199:554/unicast/c1/s0/live"  # Replace with your RTSP URL
-
-# Start motion detection
-detect_motion()
+# Example usage:
+if __name__ == '__main__':
+    # Example values for manual testing
+    rtsp_url = "rtsp://admin:admin@789@192.168.1.199:554/unicast/c1/s0/live"
+    camera_id = 20
+    coordinates = {"x": 100, "y": 100, "width": 200, "height": 200}
+    detect_motion(rtsp_url, camera_id, coordinates)
 
 # Stop the MQTT client loop and disconnect
 mqtt_client.loop_stop()
