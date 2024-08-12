@@ -82,24 +82,8 @@ def detect_motion(rtsp_url, camera_id, coordinates):
     cap = cv2.VideoCapture(rtsp_url)
 
     # Parameters for motion detection
-    threshold_value = 5
-    min_area_full_frame = 50
-
-    # Define the Rate Of Interest (top-left and bottom-right corners)
-    roi_top_left = (coordinates["x"], coordinates["y"])
-    roi_bottom_right = (coordinates["x"] + coordinates["width"], coordinates["y"] + coordinates["height"])
-
-    # Calculate ROI dimensions
-    roi_width = roi_bottom_right[0] - roi_top_left[0]
-    roi_height = roi_bottom_right[1] - roi_top_left[1]
-    roi_area = roi_width * roi_height
-
-    # Adjust min_area for the ROI
-    full_frame_width = 1920
-    full_frame_height = 1080
-    full_frame_area = full_frame_width * full_frame_height
-
-    min_area = (min_area_full_frame / full_frame_area) * roi_area
+    threshold_value = 16
+    min_area_full_frame = 1200
 
     # Initialize previous frame
     ret, frame = cap.read()
@@ -107,8 +91,48 @@ def detect_motion(rtsp_url, camera_id, coordinates):
         print("Failed to read the stream.")
         return
 
-    frame = cv2.resize(frame, None, fx=0.4, fy=0.4)
+    original_height, original_width = frame.shape[:2]
+
+    # Desired display size (adjust this as needed)
+    display_width = 800
+    display_height = 600
+
+    # Calculate the resizing factors dynamically
+    fx = display_width / original_width
+    fy = display_height / original_height
+
+    # Resize the frame
+    frame = cv2.resize(frame, (display_width, display_height))
+    frame_height, frame_width = frame.shape[:2]
+
+    # Define the ROI based on the resized frame
+    roi_top_left = (int(coordinates["x"] * fx), int(coordinates["y"] * fy))
+    roi_bottom_right = (int((coordinates["x"] + coordinates["width"]) * fx), int((coordinates["y"] + coordinates["height"]) * fy))
+
+    # Adjust ROI if it goes out of bounds
+    roi_top_left = (max(0, roi_top_left[0]), max(0, roi_top_left[1]))
+    roi_bottom_right = (min(frame_width, roi_bottom_right[0]), min(frame_height, roi_bottom_right[1]))
+
+    # Ensure the adjusted ROI is valid
+    if roi_bottom_right[0] <= roi_top_left[0] or roi_bottom_right[1] <= roi_top_left[1]:
+        print("Invalid ROI after adjustment. Defaulting to full frame.")
+        roi_top_left = (0, 0)
+        roi_bottom_right = (frame_width, frame_height)
+    
+    roi_width = roi_bottom_right[0] - roi_top_left[0]
+    roi_height = roi_bottom_right[1] - roi_top_left[1]
+    roi_area = roi_width * roi_height
+
+    full_frame_area = original_width * original_height
+    min_area = (min_area_full_frame / full_frame_area) * roi_area
+
+    # Extract the ROI from the frame
     roi_frame = frame[roi_top_left[1]:roi_bottom_right[1], roi_top_left[0]:roi_bottom_right[0]]
+
+    if roi_frame is None or roi_frame.size == 0:
+        print("Error: ROI frame is empty or invalid.")
+        return
+
     prev_frame_gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
     prev_frame_gray = cv2.GaussianBlur(prev_frame_gray, (21, 21), 0)
 
@@ -119,9 +143,16 @@ def detect_motion(rtsp_url, camera_id, coordinates):
         if not ret:
             break
 
-        frame = cv2.resize(frame, None, fx=0.4, fy=0.4)
+        # Resize the frame based on the same factors
+        frame = cv2.resize(frame, (display_width, display_height))
         display_frame = frame.copy()  # Copy for displaying with rectangles
+
         roi_frame = frame[roi_top_left[1]:roi_bottom_right[1], roi_top_left[0]:roi_bottom_right[0]]
+
+        if roi_frame is None or roi_frame.size == 0:
+            print("Error: ROI frame is empty or invalid during processing.")
+            break
+
         gray_frame = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
         gray_frame = cv2.GaussianBlur(gray_frame, (21, 21), 0)
 
@@ -142,7 +173,7 @@ def detect_motion(rtsp_url, camera_id, coordinates):
                 motion_detected = True
 
         current_time = time.time()
-        if motion_detected and (current_time - last_detection_time > 10):  # replace 60 with your desired second delay....
+        if motion_detected and (current_time - last_detection_time > 10):  # replace 10 with your desired second delay....
             cv2.putText(display_frame, "Motion Detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
             # Capture image
@@ -177,7 +208,7 @@ if __name__ == '__main__':
     # Example values for manual testing
     rtsp_url = "rtsp://admin:admin@789@192.168.1.199:554/unicast/c1/s0/live"
     camera_id = 20
-    coordinates = {"x": 100, "y": 100, "width": 200, "height": 200}
+    coordinates = {"x": 650, "y": 500, "width": 300, "height": 300}
     detect_motion(rtsp_url, camera_id, coordinates)
 
 # Stop the MQTT client loop and disconnect

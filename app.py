@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import threading
-from rectDetect import detect_motion
+from main import detect_motion
 
 app = Flask(__name__)
 
@@ -27,8 +27,9 @@ def start():
     detection_type = data.get('type')
     coordinates = data.get('co-ordinates')
 
-    if not rtsp_url or not camera_id or not detection_type:
-        return jsonify({"error": "Please provide rtsp_link, cameraId, and type"}), 400
+    # Validate the input data
+    if not rtsp_url or not camera_id or not detection_type or not coordinates:
+        return jsonify({"error": "Please provide rtsp_link, cameraId, type, and coordinates"}), 400
 
     # Start a new thread for this RTSP link and detection type
     thread = threading.Thread(target=start_detection, args=(rtsp_url, camera_id, detection_type, coordinates))

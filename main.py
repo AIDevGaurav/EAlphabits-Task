@@ -77,29 +77,22 @@ def capture_video(rtsp_url):
     print(f"Captured video: {video_filename}")
     return video_filename
 
-# Function to handle mouse events for drawing the ROI
-def draw_roi(event, x, y, flags, param):
-    global drawing, current_points
+# Function to set ROI based on provided points from API
+def set_roi_based_on_points(points, coordinates):
+    x_offset = coordinates["x"]
+    y_offset = coordinates["y"]
+    
+    scaled_points = []
+    for point in points:
+        scaled_x = int(point[0] + x_offset)
+        scaled_y = int(point[1] + y_offset)
+        scaled_points.append((scaled_x, scaled_y))
 
-    if event == cv2.EVENT_LBUTTONDOWN:
-        drawing = True
-        current_points = [(x, y)]
-
-    elif event == cv2.EVENT_MOUSEMOVE:
-        if drawing:
-            current_points.append((x, y))
-            cv2.line(display_frame, current_points[-2], current_points[-1], (0, 255, 0), 2)
-
-    elif event == cv2.EVENT_LBUTTONUP:
-        drawing = False
-        current_points.append((x, y))
-        cv2.line(display_frame, current_points[-2], current_points[-1], (0, 255, 0), 2)
-        roi_points.append(current_points)  # Save the current shape
-        cv2.fillPoly(roi_mask, [np.array(current_points)], (255, 255, 255))
+    return scaled_points
 
 # Function to detect motion
-def detect_motion():
-    global roi_mask, display_frame, roi_points, drawing, min_area
+def detect_motion(rtsp_url, camera_id, coordinates):
+    global roi_points, min_area
 
     cap = cv2.VideoCapture(rtsp_url)
 
@@ -113,50 +106,49 @@ def detect_motion():
         print("Failed to read the stream.")
         return
 
-    frame = cv2.resize(frame, None, fx=2.3, fy=1.3)
-    display_frame = frame.copy()
-    roi_mask = np.zeros_like(frame, dtype=np.uint8)
+    original_height, original_width = frame.shape[:2]
 
-    # Set up the mouse callback to draw the ROI
-    cv2.namedWindow("Draw ROI")
-    cv2.setMouseCallback("Draw ROI", draw_roi)
+    # Get display width and height from API coordinates
+    display_width = coordinates["display_width"]
+    display_height = coordinates["display_height"]
 
-    while True:
-        cv2.imshow("Draw ROI", display_frame)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):  # Press 'q' to finish drawing
-            break
+    # Calculate the resizing factors dynamically
+    fx = display_width / original_width
+    fy = display_height / original_height
 
-    cv2.destroyWindow("Draw ROI")
+    # Resize the frame to match the display size
+    frame = cv2.resize(frame, (display_width, display_height))
 
-    # Resize the ROI mask to match any resized frames
-    roi_mask = cv2.resize(roi_mask, (frame.shape[1], frame.shape[0]))
+    # Set ROI based on the points provided by the API
+    roi_points_from_api = coordinates["points"]
+    roi_points = set_roi_based_on_points(roi_points_from_api, coordinates)
+
+    # Create an ROI mask from the points
+    roi_mask = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.uint8)
+    cv2.fillPoly(roi_mask, [np.array(roi_points)], (255, 255, 255))
 
     # Calculate the area of the ROI
-    roi_area = sum(cv2.contourArea(np.array(shape)) for shape in roi_points)
-    full_frame_width = 1920
-    full_frame_height = 1080
-    full_frame_area = full_frame_width * full_frame_height
+    roi_area = cv2.countNonZero(roi_mask)
+    full_frame_area = display_width * display_height
     min_area = (min_area_full_frame / full_frame_area) * roi_area
 
-    masked_frame = cv2.bitwise_and(frame, roi_mask)
-    prev_frame_gray = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
+    prev_frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     prev_frame_gray = cv2.GaussianBlur(prev_frame_gray, (21, 21), 0)
 
     last_detection_time = 0
 
     # Create a thread pool executor for background tasks
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            frame = cv2.resize(frame, None, fx=2.3, fy=1.3)
-            roi_mask_resized = cv2.resize(roi_mask, (frame.shape[1], frame.shape[0]))
+            frame = cv2.resize(frame, (display_width, display_height))
+            display_frame = frame.copy()  # Ensure display_frame is updated every iteration
 
-            display_frame = frame.copy()  # Copy for displaying with rectangles
-            masked_frame = cv2.bitwise_and(frame, roi_mask_resized)
+            masked_frame = cv2.bitwise_and(frame, frame, mask=roi_mask)
+
             gray_frame = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
             gray_frame = cv2.GaussianBlur(gray_frame, (21, 21), 0)
 
@@ -175,38 +167,27 @@ def detect_motion():
                     motion_detected = True
 
             current_time = time.time()
-            if motion_detected and (current_time - last_detection_time > 10):  # replace 60 with your desired second delay....
+            if motion_detected and (current_time - last_detection_time > 60):
                 cv2.putText(display_frame, "Motion Detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
                 # Capture image and video in the background
-                future_image = executor.submit(capture_image, frame.copy())
-                future_video = executor.submit(capture_video, rtsp_url)
+                frame_copy = frame.copy()  # Create a copy to pass to the background thread
+                executor.submit(capture_image, frame_copy)
+                executor.submit(capture_video, rtsp_url)
 
-                # Prepare and publish MQTT message after capturing image and video
-                def publish_mqtt_message(future_image, future_video):
-                    image_filename = future_image.result()
-                    video_filename = future_video.result()
-                    message = {
-                        "motion": "Motion detected!",
-                        "rtsp_link": rtsp_url,
-                        "cameraId": 20,
-                        "image": image_filename,
-                        "video": video_filename
-                    }
-                    publish_message(str(message))
-
-                executor.submit(publish_mqtt_message, future_image, future_video)
+                # Publish MQTT message asynchronously without waiting for image/video capture completion
+                executor.submit(publish_message, f"Motion detected! Camera ID: {camera_id}")
 
                 last_detection_time = current_time
 
             # Draw all ROIs on the display frame
-            for shape in roi_points:
-                cv2.polylines(display_frame, [np.array(shape)], isClosed=True, color=(255, 0, 0), thickness=2)
+            cv2.polylines(display_frame, [np.array(roi_points)], isClosed=True, color=(255, 0, 0), thickness=2)
 
             # Display frame
             cv2.imshow("Motion Detection", display_frame)
-
-            prev_frame_gray = gray_frame
+            
+            # Update the previous frame to the current one
+            prev_frame_gray = gray_frame.copy()
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
@@ -216,16 +197,32 @@ def detect_motion():
     cap.release()
     cv2.destroyAllWindows()
 
-# Global variables for drawing the ROIs
-roi_points = []  # Store all shapes here
-current_points = []  # Points for the current shape being drawn
-drawing = False
+# Example usage:
+if __name__ == '__main__':
+    # Example RTSP URL and Camera ID
+    rtsp_url = "rtsp://admin:admin@789@192.168.1.199:554/unicast/c1/s0/live"
+    camera_id = 20
 
-# RTSP URL for motion detection
-rtsp_url = "rtsp://user:Admin$123@103.162.197.92:600/media/video2"  # Replace with your RTSP URL
+    # Example coordinates as you would receive from an API
+    coordinates = {
+        "x": 529.8125,
+        "y": 343,
+        "width": 333,
+        "height": 281,
+        "points": [
+            [0, 0],
+            [101, -174],
+            [345, -218],
+            [376, -41],
+            [36, 104],
+            [0, 0]
+        ],
+        "display_width": 1382,  # Taken from API
+        "display_height": 777   # Taken from API
+    }
 
-# Start motion detection
-detect_motion()
+    # Start motion detection
+    detect_motion(rtsp_url, camera_id, coordinates)
 
 # Stop the MQTT client loop and disconnect
 mqtt_client.loop_stop()
