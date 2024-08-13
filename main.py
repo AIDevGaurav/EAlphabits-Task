@@ -1,10 +1,14 @@
+from flask import Flask, request, jsonify
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 import os
 import time
-import threading
-import paho.mqtt.client as mqtt  # type: ignore
-from concurrent.futures import ThreadPoolExecutor
+import paho.mqtt.client as mqtt
+import json
+
+app = Flask(__name__)
 
 # MQTT configuration
 broker = "192.168.1.75"  # Replace with your MQTT broker address
@@ -35,10 +39,8 @@ mqtt_client.on_disconnect = on_disconnect
 # Connect to the broker with a longer keepalive interval
 mqtt_client.connect(broker, port, keepalive=120)
 
-# Function to publish a message
-def publish_message(message):
-    mqtt_client.publish(topic, message)
-    print(f"Published message: {message}")
+# Start the MQTT loop and keep it running in a background thread
+mqtt_client.loop_start()
 
 # Ensure directories exist
 image_dir = "images"
@@ -76,7 +78,17 @@ def capture_video(rtsp_url):
     print(f"Captured video: {absolute_video_path}")
     return absolute_video_path
 
-# Function to set ROI based on provided points from API
+def publish_message(motion_type, rtsp_url, camera_id, image_filename, video_filename):
+    message = {
+        "rtsp_link": rtsp_url,
+        "cameraId": camera_id,
+        "type": motion_type,
+        "image": image_filename,
+        "video": video_filename
+    }
+    mqtt_client.publish(topic, json.dumps(message))
+    print(f"Published message: {json.dumps(message)}")
+
 def set_roi_based_on_points(points, coordinates):
     x_offset = coordinates["x"]
     y_offset = coordinates["y"]
@@ -89,8 +101,7 @@ def set_roi_based_on_points(points, coordinates):
 
     return scaled_points
 
-# Function to detect motion
-def detect_motion(rtsp_url, camera_id, coordinates):
+def detect_motion(rtsp_url, camera_id, coordinates, motion_type):
     global roi_points, min_area
 
     cap = cv2.VideoCapture(rtsp_url)
@@ -144,7 +155,7 @@ def detect_motion(rtsp_url, camera_id, coordinates):
                 break
 
             frame = cv2.resize(frame, (display_width, display_height))
-            display_frame = frame.copy()  # Ensure display_frame is updated every iteration
+            display_frame = frame.copy()
 
             masked_frame = cv2.bitwise_and(frame, frame, mask=roi_mask)
 
@@ -170,12 +181,14 @@ def detect_motion(rtsp_url, camera_id, coordinates):
                 cv2.putText(display_frame, "Motion Detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
                 # Capture image and video in the background
-                frame_copy = frame.copy()  # Create a copy to pass to the background thread
-                executor.submit(capture_image, frame_copy)
-                executor.submit(capture_video, rtsp_url)
+                frame_copy = frame.copy()
+                image_filename_future = executor.submit(capture_image, frame_copy)
+                video_filename_future = executor.submit(capture_video, rtsp_url)
 
-                # Publish MQTT message asynchronously without waiting for image/video capture completion
-                executor.submit(publish_message, f"Motion detected! Camera ID: {camera_id}")
+                # Publish MQTT message asynchronously with image and video filenames
+                image_filename = image_filename_future.result()
+                video_filename = video_filename_future.result()
+                executor.submit(publish_message, motion_type, rtsp_url, camera_id, image_filename, video_filename)
 
                 last_detection_time = current_time
 
@@ -196,35 +209,28 @@ def detect_motion(rtsp_url, camera_id, coordinates):
     cap.release()
     cv2.destroyAllWindows()
 
-# Example usage:
+# Endpoint to receive an array of motion detection tasks
+@app.route('/detect_motion', methods=['POST'])
+def detect_motion_endpoint():
+    tasks = request.json
+    threads = []
+
+    for task in tasks:
+        rtsp_url = task["rtsp_link"]
+        camera_id = task["cameraId"]
+        motion_type = task["type"]
+        coordinates = task["co-ordinates"]
+
+        # Start a new thread for each motion detection task
+        thread = threading.Thread(target=detect_motion, args=(rtsp_url, camera_id, coordinates, motion_type))
+        thread.start()
+        threads.append(thread)
+
+    for thread in threads:
+        thread.join()
+
+    return jsonify({"status": "Motion detection tasks started"}), 200
+
 if __name__ == '__main__':
-    # Example RTSP URL and Camera ID
-    rtsp_url = "rtsp://admin:admin@789@192.168.1.199:554/unicast/c1/s0/live"
-    camera_id = 20
-
-    # Example coordinates as you would receive from an API
-    coordinates = {
-        "x": 529.8125,
-        "y": 343,
-        "width": 333,
-        "height": 281,
-        "points": [
-            [0, 0],
-            [101, -174],
-            [345, -218],
-            [376, -41],
-            [36, 104],
-            [0, 0]
-        ],
-        "display_width": 1382,  # Taken from API
-        "display_height": 777   # Taken from API
-    }
-
-    # Start motion detection in a separate thread
-    motion_thread = threading.Thread(target=detect_motion, args=(rtsp_url, camera_id, coordinates))
-    motion_thread.start()
-
-    # Start the MQTT loop and keep it running
-    mqtt_client.loop_forever()
-
-# Note: The MQTT loop will run forever, and the script will handle reconnections if needed.
+    # Start the Flask server
+    app.run(host='0.0.0.0', port=5000)
