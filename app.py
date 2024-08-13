@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-from concurrent.futures import ThreadPoolExecutor
 import threading
 import cv2
 import numpy as np
@@ -151,84 +150,86 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type):
 
     last_detection_time = 0
 
-    # Create a thread pool executor for background tasks
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+    # Main motion detection loop
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-            frame = cv2.resize(frame, (display_width, display_height))
-            display_frame = frame.copy()
+        frame = cv2.resize(frame, (display_width, display_height))
+        display_frame = frame.copy()
 
-            masked_frame = cv2.bitwise_and(frame, frame, mask=roi_mask)
+        masked_frame = cv2.bitwise_and(frame, frame, mask=roi_mask)
 
-            gray_frame = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
-            gray_frame = cv2.GaussianBlur(gray_frame, (21, 21), 0)
+        gray_frame = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
+        gray_frame = cv2.GaussianBlur(gray_frame, (21, 21), 0)
 
-            frame_diff = cv2.absdiff(prev_frame_gray, gray_frame)
-            _, thresh_frame = cv2.threshold(frame_diff, threshold_value, 255, cv2.THRESH_BINARY)
-            thresh_frame = cv2.dilate(thresh_frame, None, iterations=2)
+        frame_diff = cv2.absdiff(prev_frame_gray, gray_frame)
+        _, thresh_frame = cv2.threshold(frame_diff, threshold_value, 255, cv2.THRESH_BINARY)
+        thresh_frame = cv2.dilate(thresh_frame, None, iterations=2)
 
-            contours, _ = cv2.findContours(thresh_frame.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(thresh_frame.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-            motion_detected = False
+        motion_detected = False
 
-            for contour in contours:
-                if cv2.contourArea(contour) > min_area:
-                    (x, y, w, h) = cv2.boundingRect(contour)
-                    cv2.rectangle(display_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    motion_detected = True
+        for contour in contours:
+            if cv2.contourArea(contour) > min_area:
+                (x, y, w, h) = cv2.boundingRect(contour)
+                cv2.rectangle(display_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                motion_detected = True
 
-            current_time = time.time()
-            if motion_detected and (current_time - last_detection_time > 60):
-                cv2.putText(display_frame, "Motion Detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        current_time = time.time()
+        if motion_detected and (current_time - last_detection_time > 60):
+            cv2.putText(display_frame, "Motion Detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-                # Capture image and video in the background
-                frame_copy = frame.copy()
-                image_filename_future = executor.submit(capture_image, frame_copy)
-                video_filename_future = executor.submit(capture_video, rtsp_url)
+            # Capture image and video in the background
+            frame_copy = frame.copy()
+            image_filename = capture_image(frame_copy)
+            video_filename = capture_video(rtsp_url)
 
-                # Publish MQTT message asynchronously with image and video filenames
-                image_filename = image_filename_future.result()
-                video_filename = video_filename_future.result()
-                executor.submit(publish_message, motion_type, rtsp_url, camera_id, image_filename, video_filename)
+            # Publish MQTT message asynchronously with image and video filenames
+            publish_message(motion_type, rtsp_url, camera_id, image_filename, video_filename)
 
-                last_detection_time = current_time
+            last_detection_time = current_time
 
-            # Draw all ROIs on the display frame
-            cv2.polylines(display_frame, [np.array(roi_points)], isClosed=True, color=(255, 0, 0), thickness=2)
+        # Draw all ROIs on the display frame
+        cv2.polylines(display_frame, [np.array(roi_points)], isClosed=True, color=(255, 0, 0), thickness=2)
 
-            # Display frame
-            cv2.imshow("Motion Detection", display_frame)
-            
-            # Update the previous frame to the current one
-            prev_frame_gray = gray_frame.copy()
+        # Display frame
+        cv2.imshow("Motion Detection", display_frame)
+        
+        # Update the previous frame to the current one
+        prev_frame_gray = gray_frame.copy()
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-            if cv2.getWindowProperty('Motion Detection', cv2.WND_PROP_VISIBLE) < 1:
-                break
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+        if cv2.getWindowProperty('Motion Detection', cv2.WND_PROP_VISIBLE) < 1:
+            break
 
     cap.release()
     cv2.destroyAllWindows()
+
+# Function to run the detection in a new thread
+def start_detection(task):
+    rtsp_url = task["rtsp_link"]
+    camera_id = task["cameraId"]
+    motion_type = task["type"]
+    coordinates = task["co-ordinates"]
+    detect_motion(rtsp_url, camera_id, coordinates, motion_type)
 
 # Endpoint to receive an array of motion detection tasks
 @app.route('/start', methods=['POST'])
 def detect_motion_endpoint():
     tasks = request.json
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        for task in tasks:
-            rtsp_url = task["rtsp_link"]
-            camera_id = task["cameraId"]
-            motion_type = task["type"]
-            coordinates = task["co-ordinates"]
+    # Start each detection task in a separate thread
+    for task in tasks:
+        thread = threading.Thread(target=start_detection, args=(task,))
+        thread.start()
 
-            # Start a new thread for each motion detection task using ThreadPoolExecutor
-            executor.submit(detect_motion, rtsp_url, camera_id, coordinates, motion_type)
-
+    # Immediately return a response to the client
     return jsonify({"status": "Motion detection tasks started"}), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    from waitress import serve
+    serve(app, host='0.0.0.0', port=5000)
