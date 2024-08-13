@@ -1,18 +1,23 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS # type: ignore
 import threading
 import cv2
 import numpy as np
 import os
 import time
-import paho.mqtt.client as mqtt
+import paho.mqtt.client as mqtt # type: ignore
 import json
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 # MQTT configuration
 broker = "192.168.1.75"  # Replace with your MQTT broker address
 port = 1883  # Replace with your MQTT broker port
 topic = "motion/detection"
+
+# Global dictionary to keep track of threads and stop flags
+tasks_threads = {}
 
 # Define the MQTT client callbacks
 def on_connect(client, userdata, flags, rc):
@@ -61,11 +66,16 @@ def capture_image(frame):
 
 def capture_video(rtsp_url):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    video_filename = os.path.join(video_dir, f"motion_{timestamp}.avi")
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    video_filename = os.path.join(video_dir, f"motion_{timestamp}.mp4")
+    
+    # Use the H.264 codec for MP4 format
+    fourcc = cv2.VideoWriter_fourcc(*'H264')  # Alternatively, use 'avc1' or 'X264'
+    
     cap_video = cv2.VideoCapture(rtsp_url)
     width = int(cap_video.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap_video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    # Create a VideoWriter object with MP4 format
     out = cv2.VideoWriter(video_filename, fourcc, 20.0, (width, height))
 
     start_time = time.time()
@@ -104,7 +114,7 @@ def set_roi_based_on_points(points, coordinates):
 
     return scaled_points
 
-def detect_motion(rtsp_url, camera_id, coordinates, motion_type):
+def detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event):
     global roi_points, min_area
 
     cap = cv2.VideoCapture(rtsp_url)
@@ -151,7 +161,7 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type):
     last_detection_time = 0
 
     # Main motion detection loop
-    while True:
+    while not stop_event.is_set():
         ret, frame = cap.read()
         if not ret:
             break
@@ -211,11 +221,13 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type):
 
 # Function to run the detection in a new thread
 def start_detection(task):
-    rtsp_url = task["rtsp_link"]
     camera_id = task["cameraId"]
+    stop_event = threading.Event()
+    tasks_threads[camera_id] = stop_event
+    rtsp_url = task["rtsp_link"]
     motion_type = task["type"]
     coordinates = task["co-ordinates"]
-    detect_motion(rtsp_url, camera_id, coordinates, motion_type)
+    detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event)
 
 # Endpoint to receive an array of motion detection tasks
 @app.route('/start', methods=['POST'])
@@ -224,12 +236,25 @@ def detect_motion_endpoint():
 
     # Start each detection task in a separate thread
     for task in tasks:
-        thread = threading.Thread(target=start_detection, args=(task,))
-        thread.start()
+        camera_id = task["cameraId"]
+        if camera_id not in tasks_threads:
+            thread = threading.Thread(target=start_detection, args=(task,))
+            thread.start()
 
     # Immediately return a response to the client
     return jsonify({"status": "Motion detection tasks started"}), 200
 
+# Endpoint to stop a specific task based on cameraId
+@app.route('/stop', methods=['POST'])
+def stop_motion_detection():
+    camera_id = request.json.get('cameraId')
+    if camera_id in tasks_threads:
+        tasks_threads[camera_id].set()
+        del tasks_threads[camera_id]
+        return jsonify({"status": f"Motion detection task for cameraId {camera_id} stopped"}), 200
+    else:
+        return jsonify({"error": f"Task for cameraId {camera_id} not found"}), 404
+
 if __name__ == '__main__':
-    from waitress import serve
+    from waitress import serve # type: ignore
     serve(app, host='0.0.0.0', port=5000)
