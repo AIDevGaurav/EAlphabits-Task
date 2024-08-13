@@ -32,16 +32,13 @@ mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 mqtt_client.on_disconnect = on_disconnect
 
-# Connect to the broker
-mqtt_client.connect(broker, port, 60)
+# Connect to the broker with a longer keepalive interval
+mqtt_client.connect(broker, port, keepalive=120)
 
 # Function to publish a message
 def publish_message(message):
     mqtt_client.publish(topic, message)
     print(f"Published message: {message}")
-
-# Start the MQTT client loop in a separate thread
-mqtt_client.loop_start()
 
 # Ensure directories exist
 image_dir = "images"
@@ -223,10 +220,11 @@ if __name__ == '__main__':
         "display_height": 777   # Taken from API
     }
 
-    # Start motion detection
-    detect_motion(rtsp_url, camera_id, coordinates)
+    # Start motion detection in a separate thread
+    motion_thread = threading.Thread(target=detect_motion, args=(rtsp_url, camera_id, coordinates))
+    motion_thread.start()
 
-# Stop the MQTT client loop and disconnect
-mqtt_client.loop_stop()
-mqtt_client.disconnect()
+    # Start the MQTT loop and keep it running
+    mqtt_client.loop_forever()
 
+# Note: The MQTT loop will run forever, and the script will handle reconnections if needed.
