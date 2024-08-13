@@ -42,7 +42,7 @@ def on_disconnect(client, userdata, rc):
 # Initialize MQTT client and set up callbacks
 mqtt_client = mqtt.Client(client_id="Gaurav")
 mqtt_client.on_connect = on_connect
-mqtt_client.on_message = on_message
+# mqtt_client.on_message = on_message
 mqtt_client.on_disconnect = on_disconnect
 
 mqtt_client.connect(broker, port, keepalive=300)  # Set to 300 seconds or as needed
@@ -69,7 +69,7 @@ def capture_video(rtsp_url):
     video_filename = os.path.join(video_dir, f"motion_{timestamp}.mp4")
     
     # Use the H.264 codec for MP4 format
-    fourcc = cv2.VideoWriter_fourcc(*'H264')  # Alternatively, use 'avc1' or 'X264'
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # or 'avc1'
     
     cap_video = cv2.VideoCapture(rtsp_url)
     width = int(cap_video.get(cv2.CAP_PROP_FRAME_WIDTH))
