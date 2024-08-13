@@ -53,8 +53,9 @@ def capture_image(frame):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     image_filename = os.path.join(image_dir, f"motion_{timestamp}.jpg")
     cv2.imwrite(image_filename, frame)
-    print(f"Captured image: {image_filename}")
-    return image_filename
+    absolute_image_path = os.path.abspath(image_filename)
+    print(f"Captured image: {absolute_image_path}")
+    return absolute_image_path
 
 def capture_video(rtsp_url):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -74,8 +75,9 @@ def capture_video(rtsp_url):
 
     cap_video.release()
     out.release()
-    print(f"Captured video: {video_filename}")
-    return video_filename
+    absolute_video_path = os.path.abspath(video_filename)
+    print(f"Captured video: {absolute_video_path}")
+    return absolute_video_path
 
 # Function to set ROI based on provided points from API
 def set_roi_based_on_points(points, coordinates):
@@ -227,3 +229,4 @@ if __name__ == '__main__':
 # Stop the MQTT client loop and disconnect
 mqtt_client.loop_stop()
 mqtt_client.disconnect()
+
