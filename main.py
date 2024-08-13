@@ -36,8 +36,8 @@ mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 mqtt_client.on_disconnect = on_disconnect
 
-# Connect to the broker with a longer keepalive interval
-mqtt_client.connect(broker, port, keepalive=120)
+mqtt_client.connect(broker, port, keepalive=300)  # Set to 300 seconds or as needed
+
 
 # Start the MQTT loop and keep it running in a background thread
 mqtt_client.loop_start()
@@ -232,5 +232,5 @@ def detect_motion_endpoint():
     return jsonify({"status": "Motion detection tasks started"}), 200
 
 if __name__ == '__main__':
-    # Start the Flask server
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, debug=False)
+
