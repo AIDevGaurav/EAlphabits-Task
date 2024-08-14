@@ -118,6 +118,7 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event):
     global roi_points, min_area
 
     cap = cv2.VideoCapture(rtsp_url)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)  # Increase buffer size
 
     # Parameters for motion detection
     threshold_value = 16
@@ -226,7 +227,7 @@ def start_detection(task):
     tasks_threads[camera_id] = stop_event
     rtsp_url = task["rtsp_link"]
     motion_type = task["type"]
-    coordinates = task["co-ordinates"]
+    coordinates = task["co_ordinates"]
     detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event)
 
 # Endpoint to receive an array of motion detection tasks
@@ -247,13 +248,28 @@ def detect_motion_endpoint():
 # Endpoint to stop a specific task based on cameraId
 @app.route('/stop', methods=['POST'])
 def stop_motion_detection():
-    camera_id = request.json.get('cameraId')
-    if camera_id in tasks_threads:
-        tasks_threads[camera_id].set()
-        del tasks_threads[camera_id]
-        return jsonify({"status": f"Motion detection task for cameraId {camera_id} stopped"}), 200
-    else:
-        return jsonify({"error": f"Task for cameraId {camera_id} not found"}), 404
+    camera_ids = request.json.get('cameraIds', [])  # Get the array of camera IDs from the request
+    if not isinstance(camera_ids, list):
+        return jsonify({"error": "cameraIds should be an array"}), 400
+
+    stopped_tasks = []
+    not_found_tasks = []
+
+    for camera_id in camera_ids:
+        if camera_id in tasks_threads:
+            tasks_threads[camera_id].set()  # Set the stop event for the corresponding task
+            del tasks_threads[camera_id]  # Remove the task from the dictionary
+            stopped_tasks.append(camera_id)
+        else:
+            not_found_tasks.append(camera_id)
+
+    # Prepare the response
+    response = {
+        "stopped": stopped_tasks,
+        "not_found": not_found_tasks
+    }
+
+    return jsonify(response), 200
 
 if __name__ == '__main__':
     from waitress import serve # type: ignore
