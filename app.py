@@ -25,9 +25,6 @@ def on_connect(client, userdata, flags, rc):
     print(f"Connected with result code {rc} and client id {client_id}")
     client.subscribe(topic)  # Subscribe to the topic when connected
 
-def on_message(client, userdata, msg):
-    print(f"Received message: {msg.topic} -> {msg.payload.decode()}")
-
 def on_disconnect(client, userdata, rc):
     print("Disconnected with result code " + str(rc))
     if rc != 0:
@@ -42,7 +39,6 @@ def on_disconnect(client, userdata, rc):
 # Initialize MQTT client and set up callbacks
 mqtt_client = mqtt.Client(client_id="Gaurav")
 mqtt_client.on_connect = on_connect
-# mqtt_client.on_message = on_message
 mqtt_client.on_disconnect = on_disconnect
 
 mqtt_client.connect(broker, port, keepalive=300)  # Set to 300 seconds or as needed
@@ -68,8 +64,8 @@ def capture_video(rtsp_url):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     video_filename = os.path.join(video_dir, f"motion_{timestamp}.mp4")
     
-    # Use the H.264 codec for MP4 format
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # or 'avc1'
+    # Use the MP4V codec for MP4 format
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     
     cap_video = cv2.VideoCapture(rtsp_url)
     width = int(cap_video.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -79,7 +75,7 @@ def capture_video(rtsp_url):
     out = cv2.VideoWriter(video_filename, fourcc, 20.0, (width, height))
 
     start_time = time.time()
-    while int(time.time() - start_time) < 5:
+    while int(time.time() - start_time) < 5:  # Capture for 5 seconds
         ret, frame = cap_video.read()
         if not ret:
             break
@@ -147,9 +143,12 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event):
     roi_points_from_api = coordinates["points"]
     roi_points = set_roi_based_on_points(roi_points_from_api, coordinates)
 
+    # Convert roi_points to a numpy array of type int32
+    roi_points = np.array(roi_points, dtype=np.int32)
+
     # Create an ROI mask from the points
     roi_mask = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.uint8)
-    cv2.fillPoly(roi_mask, [np.array(roi_points)], (255, 255, 255))
+    cv2.fillPoly(roi_mask, [roi_points], (255, 255, 255))
 
     # Calculate the area of the ROI
     roi_area = cv2.countNonZero(roi_mask)
@@ -204,7 +203,7 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event):
             last_detection_time = current_time
 
         # Draw all ROIs on the display frame
-        cv2.polylines(display_frame, [np.array(roi_points)], isClosed=True, color=(255, 0, 0), thickness=2)
+        cv2.polylines(display_frame, [roi_points], isClosed=True, color=(255, 0, 0), thickness=2)
 
         # Display frame
         cv2.imshow("Motion Detection", display_frame)
@@ -276,7 +275,6 @@ def stop_motion_detection():
 
     return jsonify(response), 200
 
-
 if __name__ == '__main__':
-    from waitress import serve # type: ignore
+    from waitress import serve  # type: ignore
     serve(app, host='0.0.0.0', port=5000)

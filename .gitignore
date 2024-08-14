@@ -1,0 +1,12 @@
+# Ignore Python bytecode files
+__pycache__/
+*.pyc
+
+myenv/
+
+freeHandDetect.py
+main.py
+Manual Instruction.txt
+pub-sub_Mqtt.py
+rectDetect.py
+
