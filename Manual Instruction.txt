@@ -1,3 +1,0 @@
-I m using Python 3.11.7 in Conda 
-requirement.txt is provided
-detect.py contains the main function as Detect_motion and capture_ image, capture_video as sub-functions.
