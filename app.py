@@ -245,10 +245,11 @@ def detect_motion_endpoint():
     # Immediately return a response to the client
     return jsonify({"status": "Motion detection tasks started"}), 200
 
-# Endpoint to stop a specific task based on cameraId
 @app.route('/stop', methods=['POST'])
 def stop_motion_detection():
     camera_ids = request.json.get('cameraIds', [])  # Get the array of camera IDs from the request
+    
+    # Check if the cameraIds is a list
     if not isinstance(camera_ids, list):
         return jsonify({"error": "cameraIds should be an array"}), 400
 
@@ -263,13 +264,18 @@ def stop_motion_detection():
         else:
             not_found_tasks.append(camera_id)
 
+    # Determine success based on whether any tasks were stopped
+    success = len(stopped_tasks) > 0
+
     # Prepare the response
     response = {
+        "success": success,
         "stopped": stopped_tasks,
         "not_found": not_found_tasks
     }
 
     return jsonify(response), 200
+
 
 if __name__ == '__main__':
     from waitress import serve # type: ignore
