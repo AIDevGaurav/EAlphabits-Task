@@ -12,7 +12,7 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 # MQTT configuration
-broker = "192.168.1.75"  # Replace with your MQTT broker address
+broker = "192.168.1.120"  # Replace with your MQTT broker address
 port = 1883  # Replace with your MQTT broker port
 topic = "motion/detection"
 
@@ -126,15 +126,9 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event):
         print("Failed to read the stream.")
         return
 
-    original_height, original_width = frame.shape[:2]
-
     # Get display width and height from API coordinates
     display_width = coordinates["display_width"]
     display_height = coordinates["display_height"]
-
-    # Calculate the resizing factors dynamically
-    fx = display_width / original_width
-    fy = display_height / original_height
 
     # Resize the frame to match the display size
     frame = cv2.resize(frame, (display_width, display_height))
@@ -155,10 +149,12 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event):
     full_frame_area = display_width * display_height
     min_area = (min_area_full_frame / full_frame_area) * roi_area
 
-    prev_frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    prev_frame_gray = cv2.GaussianBlur(prev_frame_gray, (21, 21), 0)
+    # Initialize previous frame for comparison
+    prev_frame_gray = None
 
     last_detection_time = 0
+
+    window_name = f"Motion Detection - Camera {camera_id}"
 
     # Main motion detection loop
     while not stop_event.is_set():
@@ -174,6 +170,12 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event):
         gray_frame = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
         gray_frame = cv2.GaussianBlur(gray_frame, (21, 21), 0)
 
+        # If prev_frame_gray is None, set it and skip this iteration
+        if prev_frame_gray is None:
+            prev_frame_gray = gray_frame
+            continue
+
+        # Compare the current frame with the previous frame
         frame_diff = cv2.absdiff(prev_frame_gray, gray_frame)
         _, thresh_frame = cv2.threshold(frame_diff, threshold_value, 255, cv2.THRESH_BINARY)
         thresh_frame = cv2.dilate(thresh_frame, None, iterations=2)
@@ -206,18 +208,18 @@ def detect_motion(rtsp_url, camera_id, coordinates, motion_type, stop_event):
         cv2.polylines(display_frame, [roi_points], isClosed=True, color=(255, 0, 0), thickness=2)
 
         # Display frame
-        cv2.imshow("Motion Detection", display_frame)
-        
+        cv2.imshow(window_name, display_frame)
+
         # Update the previous frame to the current one
         prev_frame_gray = gray_frame.copy()
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        if cv2.getWindowProperty('Motion Detection', cv2.WND_PROP_VISIBLE) < 1:
+        if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
             break
 
     cap.release()
-    cv2.destroyAllWindows()
+    cv2.destroyWindow(window_name)  # Close only the specific window for this camera
 
 # Function to run the detection in a new thread
 def start_detection(task):
@@ -260,6 +262,7 @@ def stop_motion_detection():
             tasks_threads[camera_id].set()  # Set the stop event for the corresponding task
             del tasks_threads[camera_id]  # Remove the task from the dictionary
             stopped_tasks.append(camera_id)
+            cv2.destroyWindow(f"Motion Detection - Camera {camera_id}")  # Close the window for this camera
         else:
             not_found_tasks.append(camera_id)
 
